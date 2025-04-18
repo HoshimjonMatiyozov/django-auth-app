@@ -1,66 +1,65 @@
-from django.shortcuts import render
-from rest_framework.views import APIView
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
-from django.contrib.auth.models import User
-from .serializers import RegisterSerializer
-from drf_spectacular.utils import extend_schema
+from rest_framework.decorators import permission_classes
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework.permissions import AllowAny
+from drf_spectacular.utils import extend_schema, OpenApiExample
+from django.contrib.auth import get_user_model
+from .serializers import LoginSerializer
+from .serializers import RegisterSerializer, UserSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .serializers import serializers
-# from drf_spectacular.utils import extend_schema
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+User = get_user_model()
 
 class RegisterView(APIView):
+    permission_classes = [AllowAny]
+    serializer_class = RegisterSerializer
+
     @extend_schema(
-            request=RegisterSerializer,
-            responses={200: 'Main list'}
+        request=RegisterSerializer,
+        responses={201: RegisterSerializer},
+        summary="Foydalanuvchini ro'yxatdan o'tkazish"
     )
     def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
-        validated_data = serializer.validated_data
-        if serializer.is_valid():
-            if User.objects.filter(username=validated_data['username']).exists():
-                return Response({'error': 'Username already exists'}, status=status.HTTP_400_BAD_REQUEST)
-            user = User.objects.create_user(
-            username=validated_data['username'],
-            email=validated_data.get('email'),
-            password=validated_data['password']
-            )
-            return Response({"message": "User registered successfully"}, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
 
-# class RegisterView(APIView):
-#     permission_classes = [AllowAny]
+    @extend_schema(
+        summary="Tizimga kirgan foydalanuvchi haqida ma'lumot",
+        responses=UserSerializer,
+        tags=["Authentication"]
+    )
+    def get(self, request):
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data)
 
-#     def post(self, request):
-#         username = request.data.get('username')
-#         password = request.data.get('password')
-#         email = request.data.get('email')
-
-#         if User.objects.filter(username=username).exists():
-#             return Response({'error': 'Username already exists'}, status=status.HTTP_400_BAD_REQUEST)
-
-#         user = User.objects.create_user(username=username, password=password, email=email)
-#         return Response({'message': 'User created successfully'}, status=status.HTTP_201_CREATED)
-
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def me(request):
-    return Response({
-        "id": request.user.id,
-        "username": request.user.username,
-        "email": request.user.email
-    })
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Logout qilish (refresh tokenni blacklistga qo‘yish)",
+        request={
+            "type": "object",
+            "properties": {
+                "refresh": {
+                    "type": "string",
+                    "example": "your_refresh_token_here"
+                }
+            },
+            "required": ["refresh"]
+        },
+        responses={
+            205: OpenApiExample("Chiqildi", value={"message": "Successfully logged out."}),
+            400: OpenApiExample("Xatolik", value={"error": "Token is invalid or expired"})
+        },
+        tags=["Authentication"]
+    )
     def post(self, request):
         try:
             refresh_token = request.data["refresh"]
@@ -69,20 +68,27 @@ class LogoutView(APIView):
             return Response({"message": "Successfully logged out."}, status=status.HTTP_205_RESET_CONTENT)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        
-        
-class UserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ['id', 'username', 'email']
 
-class MeView(APIView):
-    permission_classes = [IsAuthenticated]
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = LoginSerializer
 
-    def get(self, request):
-        user = request.user
-        return Response({
-            "id": user.id,
-            "username": user.username,
-            "email": user.email
-        })
+    @extend_schema(
+        summary="Login (JWT access va refresh token olish)",
+        request=LoginSerializer,
+        tags=["Authentication"],
+        responses={
+            200: OpenApiExample(
+                "Tokenlar",
+                value={
+                    "refresh": "your_refresh_token_here",
+                    "access": "your_access_token_here"
+                }
+            ),
+            401: OpenApiExample(
+                "Noto‘g‘ri login",
+                value={"detail": "No active account found with the given credentials"}
+            )
+        }
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
