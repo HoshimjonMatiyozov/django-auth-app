@@ -9,6 +9,8 @@ from django.contrib.auth import get_user_model
 from .serializers import LoginSerializer
 from .serializers import RegisterSerializer, UserSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
+from drf_yasg.utils import swagger_auto_schema
+from .serializers import LogoutSerializer
 
 User = get_user_model()
 
@@ -30,10 +32,10 @@ class RegisterView(APIView):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(
-        summary="Tizimga kirgan foydalanuvchi haqida ma'lumot",
-        responses=UserSerializer,
-        tags=["Authentication"]
+    @swagger_auto_schema(
+        operation_summary="Get current user info",
+        operation_description="Returns details of the currently authenticated user.",
+        responses={200: UserSerializer}
     )
     def get(self, request):
         serializer = UserSerializer(request.user)
@@ -42,32 +44,22 @@ class MeView(APIView):
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
-    @extend_schema(
-        summary="Logout qilish (refresh tokenni blacklistga qo‘yish)",
-        request={
-            "type": "object",
-            "properties": {
-                "refresh": {
-                    "type": "string",
-                    "example": "your_refresh_token_here"
-                }
-            },
-            "required": ["refresh"]
-        },
-        responses={
-            205: OpenApiExample("Chiqildi", value={"message": "Successfully logged out."}),
-            400: OpenApiExample("Xatolik", value={"error": "Token is invalid or expired"})
-        },
-        tags=["Authentication"]
+    @swagger_auto_schema(
+        request_body=LogoutSerializer,
+        operation_summary="Logout user (Blacklist refresh token)",
+        responses={204: "No Content"}
     )
     def post(self, request):
+        serializer = LogoutSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
         try:
-            refresh_token = request.data["refresh"]
-            token = RefreshToken(refresh_token)
+            token = RefreshToken(serializer.validated_data['refresh'])
             token.blacklist()
-            return Response({"message": "Successfully logged out."}, status=status.HTTP_205_RESET_CONTENT)
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Invalid token or already blacklisted"}, status=400)
+
+        return Response(status=204)
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = LoginSerializer
